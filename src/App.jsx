@@ -1,7 +1,7 @@
 ﻿import { useEffect, useRef, useState } from "react";
+import { supabase } from "./supabase";
 import GoldenFairies from "./components/fairies/GoldenFairies";
-import * as ContentManagerModule from "./components/ContentManager";
-import * as GalleryModule from "./components/Gallery";
+import ContentManagerComponent from "./components/ContentManager";
 import "./App.css";
 
 /* =========================================================
@@ -23,38 +23,6 @@ import "./App.css";
 
    without breaking the entire application.
 */
-
-const GalleryComponent =
-  GalleryModule.default ||
-  GalleryModule.Gallery ||
-  (() => (
-    <div className="gallery-fallback">
-      <div className="gallery-fallback-inner">
-        <span>✦</span>
-        <h2>Gallery Component</h2>
-        <p>
-          Your Gallery component is not currently exporting
-          a default or named Gallery component.
-        </p>
-      </div>
-    </div>
-  ));
-
-const ContentManagerComponent =
-  ContentManagerModule.default ||
-  ContentManagerModule.ContentManager ||
-  (() => (
-    <div className="content-manager-fallback">
-      <div className="content-manager-fallback-inner">
-        <span>✦</span>
-        <h2>Content Manager</h2>
-        <p>
-          Your ContentManager component is not currently
-          exporting a default or named ContentManager component.
-        </p>
-      </div>
-    </div>
-  ));
 
 /* =========================================================
    MAIN ROOMS
@@ -999,156 +967,258 @@ function ClosetCollectionRoom({
    CLOSET COLLECTION MANAGER
 ========================================================= */
 
-function ClosetCollection({
-  category,
-}) {
-  const storageKey =
-    `golden-closet-${category.id}`;
 
-  const [items, setItems] =
-    useState(() => {
-      try {
-        const saved =
-          localStorage.getItem(
-            storageKey
-          );
+      function ClosetCollection({ category }) {
+  const [items, setItems] = useState([]);
+  const [showForm, setShowForm] = useState(false);
+  const [image, setImage] = useState("");
+  const [imageFile, setImageFile] = useState(null);
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [link, setLink] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
-        return saved
-          ? JSON.parse(saved)
-          : [];
-      } catch {
-        return [];
-      }
-    });
+  const inputRef = useRef(null);
 
-  const [showForm, setShowForm] =
-    useState(false);
+  /* =====================================================
+     LOAD SAVED CLOSET ITEMS FROM SUPABASE
+  ===================================================== */
 
-  const [image, setImage] =
-    useState("");
+  useEffect(() => {
+    loadItems();
+  }, [category.id]);
 
-  const [name, setName] =
-    useState("");
+  const loadItems = async () => {
+    setLoading(true);
 
-  const [description, setDescription] =
-    useState("");
+    const { data, error } = await supabase
+      .from("golden_content")
+      .select("*")
+      .eq("type", `closet-${category.id}`)
+      .order("created_at", {
+        ascending: true,
+      });
 
-  const [link, setLink] =
-    useState("");
+    if (error) {
+      console.error("Failed to load closet:", error);
+      alert("Could not load your Golden Closet items.");
+    } else {
+      setItems(data || []);
+    }
 
-  const inputRef =
-    useRef(null);
+    setLoading(false);
+  };
 
-  const persistItems =
-    (newItems) => {
-      setItems(newItems);
+  /* =====================================================
+     IMAGE SELECTION
+  ===================================================== */
 
-      localStorage.setItem(
-        storageKey,
-        JSON.stringify(newItems)
-      );
+  const handleImageUpload = (event) => {
+    const file = event.target.files?.[0];
+
+    if (!file) return;
+
+    if (!file.type.startsWith("image/")) {
+      alert("Please select an image file.");
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      alert("Please choose an image smaller than 5 MB.");
+      return;
+    }
+
+    setImageFile(file);
+
+    const reader = new FileReader();
+
+    reader.onload = (event) => {
+      setImage(event.target.result);
     };
 
-  const handleImageUpload =
-    (event) => {
-      const file =
-        event.target.files?.[0];
+    reader.readAsDataURL(file);
+  };
 
-      if (!file) return;
+  /* =====================================================
+     SAVE ITEM + IMAGE TO SUPABASE
+  ===================================================== */
 
-      if (
-        !file.type.startsWith("image/")
-      ) {
-        alert(
-          "Please select an image file."
-        );
-        return;
-      }
-
-      if (
-        file.size >
-        5 * 1024 * 1024
-      ) {
-        alert(
-          "Please choose an image smaller than 5 MB."
-        );
-        return;
-      }
-
-      const reader =
-        new FileReader();
-
-      reader.onload = (event) => {
-        setImage(
-          event.target.result
-        );
-      };
-
-      reader.readAsDataURL(file);
-    };
-
-  const saveItem = () => {
-    if (!image) {
-      alert(
-        "Please add a photo first."
-      );
+  const saveItem = async () => {
+    if (!imageFile) {
+      alert("Please add a photo first.");
       return;
     }
 
     if (!name.trim()) {
-      alert(
-        "Please enter an item name."
-      );
+      alert("Please enter an item name.");
       return;
     }
 
-    const newItem = {
-      id: Date.now(),
-      image,
-      name: name.trim(),
-      description:
-        description.trim(),
-      link: link.trim(),
-    };
+    setSaving(true);
 
-    persistItems([
-      ...items,
-      newItem,
-    ]);
+    try {
+      const safeFileName = imageFile.name
+        .replace(/[^a-zA-Z0-9.-]/g, "-")
+        .toLowerCase();
 
-    setImage("");
-    setName("");
-    setDescription("");
-    setLink("");
+      const filePath =
+        `closet/${category.id}/${Date.now()}-${safeFileName}`;
 
-    setShowForm(false);
+      /* Upload image */
 
-    if (inputRef.current) {
-      inputRef.current.value = "";
+      const { error: uploadError } = await supabase.storage
+        .from("golden-images1")
+        .upload(filePath, imageFile, {
+          cacheControl: "3600",
+          upsert: false,
+        });
+
+      if (uploadError) {
+        throw uploadError;
+      }
+
+      /* Get permanent public image URL */
+
+      const { data: publicUrlData } =
+        supabase.storage
+          .from("golden-images1")
+          .getPublicUrl(filePath);
+
+      const imageUrl =
+        publicUrlData.publicUrl;
+
+      /* Save item information */
+
+      const { data: savedItem, error: databaseError } =
+        await supabase
+          .from("golden_content")
+          .insert([
+            {
+              type: `closet-${category.id}`,
+              title: name.trim(),
+              description: description.trim(),
+              image: imageUrl,
+              link: link.trim(),
+            },
+          ])
+          .select()
+          .single();
+
+      if (databaseError) {
+        /* If database saving fails, remove uploaded image */
+
+        await supabase.storage
+          .from("golden-images1")
+          .remove([filePath]);
+
+        throw databaseError;
+      }
+
+      setItems((prev) => [
+        ...prev,
+        savedItem,
+      ]);
+
+      /* Clear form */
+
+      setImage("");
+      setImageFile(null);
+      setName("");
+      setDescription("");
+      setLink("");
+      setShowForm(false);
+
+      if (inputRef.current) {
+        inputRef.current.value = "";
+      }
+    } catch (error) {
+      console.error(
+        "Failed to save closet item:",
+        error
+      );
+
+      alert(
+        "Could not save this item. Please try again."
+      );
+    } finally {
+      setSaving(false);
     }
   };
 
-  const deleteItem = (id) => {
-    const confirmed =
-      window.confirm(
-        "Remove this item from your Golden Closet?"
-      );
+  /* =====================================================
+     DELETE ITEM + IMAGE
+  ===================================================== */
+
+  const deleteItem = async (item) => {
+    const confirmed = window.confirm(
+      "Remove this item permanently from your Golden Closet?"
+    );
 
     if (!confirmed) return;
 
-    const updatedItems =
-      items.filter(
-        (item) =>
-          item.id !== id
+    try {
+      /* Delete database record */
+
+      const { error: databaseError } =
+        await supabase
+          .from("golden_content")
+          .delete()
+          .eq("id", item.id);
+
+      if (databaseError) {
+        throw databaseError;
+      }
+
+      /* Try to delete image from storage */
+
+      if (item.image) {
+        const marker =
+          "/golden-images1/";
+
+        const imageIndex =
+          item.image.indexOf(marker);
+
+        if (imageIndex !== -1) {
+          const filePath =
+            decodeURIComponent(
+              item.image.substring(
+                imageIndex + marker.length
+              )
+            );
+
+          await supabase.storage
+            .from("golden-images1")
+            .remove([filePath]);
+        }
+      }
+
+      setItems((prev) =>
+        prev.filter(
+          (savedItem) =>
+            savedItem.id !== item.id
+        )
+      );
+    } catch (error) {
+      console.error(
+        "Failed to delete closet item:",
+        error
       );
 
-    persistItems(updatedItems);
+      alert(
+        "Could not remove this item."
+      );
+    }
   };
+
+  /* =====================================================
+     CANCEL FORM
+  ===================================================== */
 
   const cancelForm = () => {
     setShowForm(false);
-
     setImage("");
+    setImageFile(null);
     setName("");
     setDescription("");
     setLink("");
@@ -1158,9 +1228,33 @@ function ClosetCollection({
     }
   };
 
+  /* =====================================================
+     LOADING
+  ===================================================== */
+
+  if (loading) {
+    return (
+      <div className="closet-empty-state">
+        <SparkleIcon size={30} />
+
+        <h2>OPENING YOUR GOLDEN CLOSET</h2>
+
+        <p>
+          Your collection is being retrieved...
+        </p>
+      </div>
+    );
+  }
+
+  /* =====================================================
+     UI
+  ===================================================== */
+
   return (
     <div className="closet-collection">
+
       <div className="closet-builder">
+
         <div className="closet-builder-heading">
           <div className="closet-builder-line" />
 
@@ -1195,6 +1289,7 @@ function ClosetCollection({
 
         {showForm && (
           <div className="closet-item-form">
+
             <div className="closet-form-title">
               <SparkleIcon size={15} />
 
@@ -1215,9 +1310,7 @@ function ClosetCollection({
             <button
               type="button"
               className={`closet-upload-box ${
-                image
-                  ? "has-image"
-                  : ""
+                image ? "has-image" : ""
               }`}
               onClick={() =>
                 inputRef.current?.click()
@@ -1247,24 +1340,19 @@ function ClosetCollection({
             </button>
 
             <div className="closet-form-fields">
-              <label>
-                ITEM NAME
-              </label>
+
+              <label>ITEM NAME</label>
 
               <input
                 type="text"
                 value={name}
                 onChange={(event) =>
-                  setName(
-                    event.target.value
-                  )
+                  setName(event.target.value)
                 }
                 placeholder="Example: Golden Evening Dress"
               />
 
-              <label>
-                DESCRIPTION
-              </label>
+              <label>DESCRIPTION</label>
 
               <textarea
                 value={description}
@@ -1284,18 +1372,18 @@ function ClosetCollection({
                 type="url"
                 value={link}
                 onChange={(event) =>
-                  setLink(
-                    event.target.value
-                  )
+                  setLink(event.target.value)
                 }
                 placeholder="https://example.com/product"
               />
 
               <div className="closet-form-actions">
+
                 <button
                   type="button"
                   className="closet-cancel-button"
                   onClick={cancelForm}
+                  disabled={saving}
                 >
                   CANCEL
                 </button>
@@ -1304,35 +1392,47 @@ function ClosetCollection({
                   type="button"
                   className="save-closet-item"
                   onClick={saveItem}
+                  disabled={saving}
                 >
-                  SAVE TO MY GOLDEN CLOSET
+                  {saving
+                    ? "SAVING TO THE GOLDEN VAULT..."
+                    : "SAVE TO MY GOLDEN CLOSET"}
                 </button>
+
               </div>
+
             </div>
           </div>
         )}
       </div>
 
       {items.length > 0 ? (
+
         <div className="closet-items-grid">
+
           {items.map((item) => (
+
             <article
               key={item.id}
               className="saved-closet-card"
             >
+
               <div className="saved-closet-image">
                 <img
                   src={item.image}
-                  alt={item.name}
+                  alt={item.title}
                 />
               </div>
 
               <div className="saved-closet-info">
+
                 <div className="saved-item-category">
                   {category.title}
                 </div>
 
-                <h3>{item.name}</h3>
+                <h3>
+                  {item.title}
+                </h3>
 
                 {item.description && (
                   <p>
@@ -1341,6 +1441,7 @@ function ClosetCollection({
                 )}
 
                 <div className="saved-closet-actions">
+
                   {item.link && (
                     <a
                       href={item.link}
@@ -1356,19 +1457,23 @@ function ClosetCollection({
                   <button
                     type="button"
                     onClick={() =>
-                      deleteItem(item.id)
+                      deleteItem(item)
                     }
                     className="delete-closet-item"
                   >
                     REMOVE
                   </button>
+
                 </div>
               </div>
             </article>
           ))}
         </div>
+
       ) : (
+
         <div className="closet-empty-state">
+
           <SparkleIcon size={30} />
 
           <h2>
@@ -1384,8 +1489,10 @@ function ClosetCollection({
             Click "CLICK TO ADD NEW ITEM"
             to begin.
           </p>
+
         </div>
       )}
+
     </div>
   );
 }
@@ -1403,7 +1510,7 @@ function GalleryRoom({ onNavigate }) {
         description="A golden chamber for the photographs, memories and little moments I never want to forget."
       />
 
-      <GalleryComponent />
+    
 
       <div className="gallery-chamber-grid">
         {galleryCategories.map(
@@ -1486,155 +1593,158 @@ function GalleryMemoryRoom({
     </section>
   );
 }
+function PhotoMemoryCollection({ category }) {
+  const [photos, setPhotos] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const inputRef = useRef(null);
 
-/* =========================================================
-   PHOTO MEMORY COLLECTION
-========================================================= */
+  const loadPhotos = async () => {
+    setLoading(true);
 
-function PhotoMemoryCollection({
-  category,
-}) {
-  const storageKey =
-    `golden-gallery-${category.id}`;
+    const { data, error } = await supabase
+      .from("golden_gallery")
+      .select("*")
+      .eq("category", category.id)
+      .order("created_at", { ascending: true });
 
-  const [photos, setPhotos] =
-    useState(() => {
-      try {
-        const saved =
-          localStorage.getItem(
-            storageKey
-          );
+    if (error) {
+      console.error("Gallery load error:", error);
+      alert("Could not load your memories.");
+    } else {
+      setPhotos(data || []);
+    }
 
-        return saved
-          ? JSON.parse(saved)
-          : [];
-      } catch {
-        return [];
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    loadPhotos();
+  }, [category.id]);
+
+  const handlePhotosUpload = async (event) => {
+    const files = Array.from(event.target.files || []);
+
+    if (!files.length) return;
+
+    for (const file of files) {
+      if (!file.type.startsWith("image/")) continue;
+
+      if (file.size > 10 * 1024 * 1024) {
+        alert(`${file.name} is larger than 10 MB and was skipped.`);
+        continue;
       }
-    });
 
-  const inputRef =
-    useRef(null);
+      const extension =
+        file.name.split(".").pop()?.toLowerCase() || "jpg";
 
-  const handlePhotosUpload =
-    (event) => {
-      const files = Array.from(
-        event.target.files || []
+      const filePath =
+        `gallery/${category.id}/${Date.now()}-${Math.random()
+          .toString(36)
+          .substring(2, 10)}.${extension}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from("golden-images")
+        .upload(filePath, file, {
+          cacheControl: "3600",
+          upsert: false,
+        });
+
+      if (uploadError) {
+        console.error(uploadError);
+        alert(`Could not upload ${file.name}.`);
+        continue;
+      }
+
+      const { data: urlData } = supabase.storage
+        .from("golden-images")
+        .getPublicUrl(filePath);
+
+      const { data: savedPhoto, error: databaseError } =
+        await supabase
+          .from("golden_gallery")
+          .insert({
+            category: category.id,
+            image: urlData.publicUrl,
+            name: file.name,
+          })
+          .select()
+          .single();
+
+      if (databaseError) {
+        console.error(databaseError);
+
+        await supabase.storage
+          .from("golden-images")
+          .remove([filePath]);
+
+        continue;
+      }
+
+      setPhotos((prev) => [...prev, savedPhoto]);
+    }
+
+    if (inputRef.current) {
+      inputRef.current.value = "";
+    }
+  };
+
+  const deletePhoto = async (photo) => {
+    const confirmed = window.confirm(
+      "Remove this memory permanently?"
+    );
+
+    if (!confirmed) return;
+
+    const marker =
+      "/storage/v1/object/public/golden-images/";
+
+    const markerIndex = photo.image.indexOf(marker);
+
+    if (markerIndex !== -1) {
+      const filePath = decodeURIComponent(
+        photo.image.substring(markerIndex + marker.length)
       );
 
-      if (!files.length) return;
+      await supabase.storage
+        .from("golden-images")
+        .remove([filePath]);
+    }
 
-      const imageFiles =
-        files.filter((file) =>
-          file.type.startsWith(
-            "image/"
-          )
-        );
+    const { error } = await supabase
+      .from("golden_gallery")
+      .delete()
+      .eq("id", photo.id);
 
-      if (!imageFiles.length) {
-        alert(
-          "Please choose image files."
-        );
-        return;
-      }
+    if (error) {
+      console.error(error);
+      alert("Could not delete this memory.");
+      return;
+    }
 
-      const validFiles =
-        imageFiles.filter(
-          (file) =>
-            file.size <=
-            5 * 1024 * 1024
-        );
-
-      if (
-        validFiles.length !==
-        imageFiles.length
-      ) {
-        alert(
-          "Some photos were larger than 5 MB and were skipped."
-        );
-      }
-
-      const readers =
-        validFiles.map(
-          (file) =>
-            new Promise((resolve) => {
-              const reader =
-                new FileReader();
-
-              reader.onload = (event) => {
-                resolve({
-                  id:
-                    `${Date.now()}-${Math.random()}`,
-                  image:
-                    event.target.result,
-                  name:
-                    file.name,
-                });
-              };
-
-              reader.readAsDataURL(
-                file
-              );
-            })
-        );
-
-      Promise.all(readers).then(
-        (newPhotos) => {
-          const updatedPhotos = [
-            ...photos,
-            ...newPhotos,
-          ];
-
-          try {
-            localStorage.setItem(
-              storageKey,
-              JSON.stringify(
-                updatedPhotos
-              )
-            );
-
-            setPhotos(
-              updatedPhotos
-            );
-          } catch {
-            alert(
-              "Your browser storage is full. Try adding fewer photos or smaller images."
-            );
-          }
-        }
-      );
-
-      if (inputRef.current) {
-        inputRef.current.value = "";
-      }
-    };
-
-  const deletePhoto = (id) => {
-    const updatedPhotos =
-      photos.filter(
-        (photo) =>
-          photo.id !== id
-      );
-
-    setPhotos(updatedPhotos);
-
-    localStorage.setItem(
-      storageKey,
-      JSON.stringify(
-        updatedPhotos
-      )
+    setPhotos((prev) =>
+      prev.filter((item) => item.id !== photo.id)
     );
   };
 
+  if (loading) {
+    return (
+      <div className="gallery-empty-state">
+        <SparkleIcon size={35} />
+        <h2>OPENING MEMORY VAULT...</h2>
+        <p>Retrieving your permanently saved memories.</p>
+      </div>
+    );
+  }
+
   return (
     <div className="gallery-memory-collection">
+
       <div className="gallery-builder">
+
         <div className="closet-builder-heading">
           <div className="closet-builder-line" />
 
-          <span>
-            PRESERVE YOUR MEMORIES
-          </span>
+          <span>PRESERVE YOUR MEMORIES</span>
 
           <div className="closet-builder-line" />
         </div>
@@ -1651,26 +1761,21 @@ function PhotoMemoryCollection({
         <button
           type="button"
           className="gallery-add-photos-button"
-          onClick={() =>
-            inputRef.current?.click()
-          }
+          onClick={() => inputRef.current?.click()}
         >
           <span className="add-button-star">
             <SparkleIcon size={18} />
           </span>
 
-          <span>
-            {category.addText}
-          </span>
+          <span>{category.addText}</span>
 
-          <span className="add-button-plus">
-            +
-          </span>
+          <span className="add-button-plus">+</span>
         </button>
       </div>
 
       {photos.length > 0 ? (
         <div className="gallery-photo-grid">
+
           {photos.map((photo) => (
             <article
               key={photo.id}
@@ -1679,53 +1784,42 @@ function PhotoMemoryCollection({
               <div className="gallery-photo-image">
                 <img
                   src={photo.image}
-                  alt={
-                    photo.name ||
-                    category.title
-                  }
+                  alt={photo.name || category.title}
                 />
               </div>
 
               <div className="gallery-photo-footer">
-                <span>
-                  {photo.name}
-                </span>
+                <span>{photo.name}</span>
 
                 <button
                   type="button"
-                  onClick={() =>
-                    deletePhoto(
-                      photo.id
-                    )
-                  }
+                  onClick={() => deletePhoto(photo)}
                 >
                   REMOVE
                 </button>
               </div>
             </article>
           ))}
+
         </div>
       ) : (
         <div className="gallery-empty-state">
+
           <SparkleIcon size={35} />
 
-          <h2>
-            YOUR MEMORY WALL IS EMPTY
-          </h2>
+          <h2>YOUR MEMORY WALL IS EMPTY</h2>
 
           <p>
-            Add your first memory to this
-            golden chamber.
+            Add your first memory to this golden chamber.
           </p>
 
           <button
             type="button"
-            onClick={() =>
-              inputRef.current?.click()
-            }
+            onClick={() => inputRef.current?.click()}
           >
             {category.addText}
           </button>
+
         </div>
       )}
     </div>
